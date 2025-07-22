@@ -1,29 +1,18 @@
-// 📦 Robust Angular Job Notifier Bot v1.3
-// ✅ Fixed API issues with enhanced headers
-// ✅ Added proxy support and exponential backoff
-// ✅ Comprehensive error handling and logging
+// 📦 Robust Angular Job Notifier Bot v1.4
+// ✅ Fixed RSS parser callback error
+// ✅ Enhanced error handling
+// ✅ More reliable job fetching
 
-const Parser = require('rss-parser');
 const axios = require('axios');
-
+const Parser = require('rss-parser');
 const parser = new Parser({
-  customFetch: async (url) => {
-    const response = await axios.get(url, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Accept': 'application/rss+xml, application/xml, text/xml',
-        'Accept-Language': 'en-US,en;q=0.9'
-      }
-    });
-    return {
-      ok: true,
-      status: response.status,
-      text: async () => response.data
-    };
+  timeout: 15000,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Accept': 'application/rss+xml, application/xml, text/xml',
+    'Accept-Language': 'en-US,en;q=0.9'
   }
 });
-
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
@@ -34,21 +23,17 @@ const CONFIG = {
     BOT_TOKEN: '7558091348:AAGh2jSqVZzTptpsMovjYsFoVpPbLtxXPwg',
     CHAT_ID: '1745428077'
   },
-  SCHEDULE: '*/30 * * * *', // Every 30 minutes
-  MAX_JOB_AGE_MINUTES: 180,  // 3 hour window
+  SCHEDULE: '*/30 * * * *',
+  MAX_JOB_AGE_MINUTES: 180,
   MAX_JOBS_PER_RUN: 30,
   REQUEST_RETRIES: 3,
-  REQUEST_TIMEOUT: 15000,    // 15 seconds
-  PROXY: null,               // 'http://user:pass@host:port'
+  REQUEST_TIMEOUT: 15000,
+  PROXY: null,
   REQUIRED_KEYWORDS: ['angular', 'frontend', 'typescript'],
-  EXCLUDED_KEYWORDS: [
-    'react', 'vue', 'backend', 
-    'node.js', 'python', 'java',
-    'php', 'wordpress', 'django'
-  ],
+  EXCLUDED_KEYWORDS: ['react', 'vue', 'backend', 'node.js'],
   SOURCES: {
     REMOTEOK: true,
-    REMOTIVE: false,         // Disabled due to API issues
+    REMOTIVE: false,
     WEWORKREMOTELY: true
   }
 };
@@ -73,7 +58,6 @@ function loadSeenJobs() {
 function saveSeenJobs() {
   try {
     fs.writeFileSync(LOG_FILE, JSON.stringify([...seenJobs], null, 2));
-    console.log(`💾 Saved ${seenJobs.size} jobs to log file`);
   } catch (err) {
     console.error('❌ Error saving job log:', err.message);
   }
@@ -87,13 +71,11 @@ async function fetchWithRetry(url, options = {}, retries = CONFIG.REQUEST_RETRIE
       timeout: CONFIG.REQUEST_TIMEOUT,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
         ...options.headers
       },
       ...options
     };
 
-    // Proxy configuration
     if (CONFIG.PROXY) {
       const proxyParts = new URL(CONFIG.PROXY);
       config.proxy = {
@@ -218,20 +200,16 @@ async function checkRemoteOK() {
         if (sent) {
           seenJobs.add(jobId);
           newJobs++;
+          saveSeenJobs();
         }
       }
     }
     
     if (newJobs > 0) {
-      saveSeenJobs();
       console.log(`✅ Sent ${newJobs} new jobs from RemoteOK`);
     }
   } catch (err) {
     console.error('❌ RemoteOK fetch error:', err.message);
-    if (err.response) {
-      console.error('Status:', err.response.status);
-      console.error('Headers:', err.response.headers);
-    }
   }
 }
 
@@ -240,52 +218,69 @@ async function checkWeWorkRemotely() {
   
   try {
     console.log('🔍 Checking WeWorkRemotely...');
-    const feed = await parser.parseURL(
+    
+    // Using axios directly instead of rss-parser to avoid callback issues
+    const response = await fetchWithRetry(
       'https://weworkremotely.com/categories/remote-programming-jobs.rss',
       {
         headers: {
-          'Referer': 'https://weworkremotely.com/',
           'Accept': 'application/rss+xml'
         }
       }
     );
     
-    const items = feed.items || [];
+    // Parse the RSS manually if needed
+    const items = [];
+    const itemMatches = response.match(/<item>[\s\S]*?<\/item>/g) || [];
+    
+    for (const itemMatch of itemMatches) {
+      const titleMatch = itemMatch.match(/<title>([\s\S]*?)<\/title>/);
+      const linkMatch = itemMatch.match(/<link>([\s\S]*?)<\/link>/);
+      const pubDateMatch = itemMatch.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+      const descMatch = itemMatch.match(/<description>([\s\S]*?)<\/description>/);
+      
+      if (titleMatch && linkMatch) {
+        items.push({
+          title: titleMatch[1].trim(),
+          link: linkMatch[1].trim(),
+          pubDate: pubDateMatch ? pubDateMatch[1].trim() : new Date().toISOString(),
+          contentSnippet: descMatch ? descMatch[1].trim() : ''
+        });
+      }
+    }
+    
     console.log(`ℹ️ Found ${items.length} jobs on WeWorkRemotely`);
     
     let newJobs = 0;
     for (const item of items) {
       if (seenJobs.size >= CONFIG.MAX_JOBS_PER_RUN) break;
       
-      const jobId = `wwr-${item.guid || item.link}`;
+      const jobId = `wwr-${item.link}`;
       if (seenJobs.has(jobId)) continue;
       
       const content = `${item.title} ${item.contentSnippet || ''}`;
       
-      if (isJobRelevant(content, item.pubDate || item.isoDate)) {
+      if (isJobRelevant(content, item.pubDate)) {
         const sent = await sendTelegramAlert({
           source: 'weworkremotely',
           title: item.title,
-          company: item.creator || 'Unknown',
+          company: 'Unknown',
           url: item.link
         });
         
         if (sent) {
           seenJobs.add(jobId);
           newJobs++;
+          saveSeenJobs();
         }
       }
     }
     
     if (newJobs > 0) {
-      saveSeenJobs();
       console.log(`✅ Sent ${newJobs} new jobs from WeWorkRemotely`);
     }
   } catch (err) {
     console.error('❌ WeWorkRemotely fetch error:', err.message);
-    if (err.response) {
-      console.error('Status:', err.response.status);
-    }
   }
 }
 
@@ -309,17 +304,14 @@ async function runJobCheck() {
 }
 
 function startBot() {
-  // Load previous job IDs
   loadSeenJobs();
   
-  // Initial run with delay
   setTimeout(() => {
     runJobCheck().catch(err => 
       console.error('⚠️ Initial run error:', err.message)
     );
   }, 5000);
   
-  // Scheduled runs
   cron.schedule(CONFIG.SCHEDULE, () => {
     runJobCheck().catch(err => 
       console.error('⚠️ Scheduled run error:', err.message)
@@ -331,5 +323,4 @@ function startBot() {
   console.log('----------------------------------------');
 }
 
-// Start the bot
 startBot();
