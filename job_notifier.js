@@ -3,18 +3,27 @@
 // ✅ Added proxy support and exponential backoff
 // ✅ Comprehensive error handling and logging
 
-const axios = require('axios');
 const Parser = require('rss-parser');
+const axios = require('axios');
+
 const parser = new Parser({
-  requestOptions: {
-    timeout: 15000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-      'Accept': 'application/rss+xml, application/xml, text/xml',
-      'Accept-Language': 'en-US,en;q=0.9'
-    }
+  customFetch: async (url) => {
+    const response = await axios.get(url, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Accept': 'application/rss+xml, application/xml, text/xml',
+        'Accept-Language': 'en-US,en;q=0.9'
+      }
+    });
+    return {
+      ok: true,
+      status: response.status,
+      text: async () => response.data
+    };
   }
 });
+
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
