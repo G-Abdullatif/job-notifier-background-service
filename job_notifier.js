@@ -8,8 +8,8 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 
-const TELEGRAM_BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN';
-const CHAT_ID = 'YOUR_CHAT_ID';
+const TELEGRAM_BOT_TOKEN = '7558091348:AAGh2jSqVZzTptpsMovjYsFoVpPbLtxXPwg';
+const CHAT_ID = '1745428077';
 
 const KEYWORDS = [
   'angular', 'frontend', 'remote', 'typescript', 'arabic',
